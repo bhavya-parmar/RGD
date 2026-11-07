@@ -1,0 +1,41 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environments & Virtual Environments
+.env
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Jupyter Notebook Checkpoints
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
+
+# Project Data and Model Artifacts (Keep directory structure via .gitkeep)
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+models/embeddings/*
+!models/embeddings/.gitkeep
+models/faiss_indices/*
+!models/faiss_indices/.gitkeep
+
+# Output artifacts & reports
+reports/
+*.html
+*.pdf
+!Data-science-project-proposal.pdf
+
+# IDE and OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

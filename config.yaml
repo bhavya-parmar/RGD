@@ -1,0 +1,92 @@
+# ==============================================================================
+# RGD: Research Gap Discovery Configuration
+# ==============================================================================
+
+project:
+  name: "Research Gap Discovery"
+  version: "0.1.0"
+  random_seed: 42
+
+paths:
+  raw_data_dir: "data/raw"
+  processed_data_dir: "data/processed"
+  embeddings_dir: "models/embeddings"
+  faiss_indices_dir: "models/faiss_indices"
+  reports_dir: "reports"
+
+# Phase 1: Literature Retrieval & Acquisition
+acquisition:
+  default_query: "physics informed neural networks"
+  max_seed_papers: 50
+  citation_expansion_depth: 1
+  max_references_per_paper: 20
+  openalex_base_url: "https://api.openalex.org"
+  request_timeout_sec: 15
+  rate_limit_pause_sec: 0.1
+
+deduplication:
+  lsh_threshold: 0.85
+  num_perm: 128
+  shingle_size: 3
+  fields_to_check:
+    - "title"
+    - "abstract"
+
+# Phase 2: Semantic & Citation Representation
+representation:
+  specter:
+    model_name: "allenai/specter2_base"
+    batch_size: 16
+    max_token_length: 512
+    device: "auto" # "cuda", "cpu", or "auto"
+  pca:
+    enabled: true
+    n_components: 64
+    random_state: 42
+  faiss:
+    dimension: 64 # Matches PCA output or SPECTER (768) if PCA disabled
+    metric: "inner_product" # Cosine similarity after L2 normalization
+    index_type: "IndexFlatIP" # or "IndexIVFFlat" for larger corpora
+    top_k_neighbors: 10
+  citation_graph:
+    directed: true
+    pagerank_alpha: 0.85
+    pagerank_max_iter: 100
+    hits_max_iter: 100
+
+# Phase 3: Community & Frontier Detection
+detection:
+  semantic_clustering:
+    algorithm: "kmeans" # "kmeans", "spectral"
+    init: "k-means++"
+    n_clusters: 8
+    max_iter: 300
+    random_state: 42
+  graph_clustering:
+    algorithm: "spectral" # "spectral", "louvain"
+    n_clusters: 8
+    louvain_resolution: 1.0
+    random_state: 42
+  frontier_scoring:
+    semantic_sim_threshold: 0.65
+    citation_connectivity_threshold: 0.10
+    min_community_size: 3
+    top_k_frontiers: 10
+
+# Phase 4: Validation & Analysis
+validation:
+  bootstrap:
+    n_iterations: 500
+    subsample_ratio: 0.80
+    confidence_interval: 0.95
+    random_state: 42
+  hypothesis_test:
+    alpha: 0.05
+    test_type: "permutation" # "permutation" or "mann_whitney"
+
+# Dashboard & Visualizations
+visualization:
+  theme: "plotly_white"
+  network_spring_layout_iterations: 50
+  save_static_plots: true
+  save_interactive_html: true

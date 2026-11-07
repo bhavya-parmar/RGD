@@ -1,0 +1,3 @@
+# Model Artifacts - FAISS Indices
+Stores compiled FAISS similarity index binaries (.index files) for fast cosine / L2 k-NN nearest-neighbor lookups.
+Files in this directory are git-ignored.

@@ -1,0 +1,3 @@
+# Data Directory - Processed
+This directory stores cleaned, expanded, and deduplicated paper metadata and citation edgelists ready for pipeline analysis.
+Files in this directory are git-ignored.

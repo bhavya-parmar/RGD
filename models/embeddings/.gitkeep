@@ -1,0 +1,3 @@
+# Model Artifacts - Embeddings
+Stores serialized SPECTER2 dense vector embeddings (e.g. .npy, .pt, or .pkl format) and fitted PCA transformers.
+Files in this directory are git-ignored.

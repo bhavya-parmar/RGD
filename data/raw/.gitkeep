@@ -1,0 +1,3 @@
+# Data Directory - Raw
+This directory stores raw JSON/CSV responses directly fetched from the OpenAlex API.
+Files in this directory are git-ignored to prevent storing large datasets in repository history.
