@@ -35,46 +35,17 @@ class SemanticCommunityDetector:
         self.cluster_centers: Optional[np.ndarray] = None
         self.silhouette: float = 0.0
 
-    def fit_predict(
-        self,
-        embeddings: np.ndarray,
-        find_optimal_k: bool = False,
-        k_min: int = 2,
-        k_max: int = 12
-    ) -> np.ndarray:
+    def fit_predict(self, embeddings: np.ndarray) -> np.ndarray:
         """
-        Cluster embeddings into semantic communities.
-        Optionally searches for k that maximizes the silhouette score.
+        Cluster embeddings into n_clusters semantic communities (fixed k).
         """
         n_samples = len(embeddings)
         if n_samples < 2:
             self.labels = np.zeros(n_samples, dtype=int)
             return self.labels
 
+        # k can't exceed the number of papers
         target_k = min(self.n_clusters, n_samples)
-
-        if find_optimal_k and n_samples > k_min:
-            best_k = target_k
-            best_score = -1.0
-            search_max = min(k_max, n_samples - 1)
-
-            for candidate_k in range(k_min, search_max + 1):
-                km = KMeans(
-                    n_clusters=candidate_k,
-                    init=self.init,
-                    max_iter=self.max_iter,
-                    random_state=self.random_state,
-                    n_init=10
-                )
-                pred = km.fit_predict(embeddings)
-                score = silhouette_score(embeddings, pred)
-                logger.debug(f"Evaluated k={candidate_k}: Silhouette = {score:.4f}")
-                if score > best_score:
-                    best_score = score
-                    best_k = candidate_k
-
-            target_k = best_k
-            logger.info(f"Optimal semantic clusters selected: k={target_k} (Silhouette: {best_score:.4f})")
 
         self.model = KMeans(
             n_clusters=target_k,
@@ -102,31 +73,15 @@ class SemanticCommunityDetector:
         embeddings: np.ndarray
     ) -> pd.DataFrame:
         """
-        Appends 'semantic_community' column and finds closest exemplar paper to each centroid.
+        Appends the 'semantic_community' column.
         """
+        # Run k-means first if it hasn't been fitted yet
         if self.labels is None:
             self.fit_predict(embeddings)
 
+        # Row i of df gets the cluster label of embedding row i
         df = df.copy()
         df["semantic_community"] = self.labels
-
-        # Find exemplar (closest to cluster centroid)
-        exemplars = {}
-        for cluster_id in range(self.model.n_clusters):
-            cluster_indices = np.where(self.labels == cluster_id)[0]
-            if len(cluster_indices) == 0:
-                continue
-            cluster_vecs = embeddings[cluster_indices]
-            center = self.cluster_centers[cluster_id]
-            # Euclidean distance to center
-            dists = np.linalg.norm(cluster_vecs - center, axis=1)
-            best_idx = cluster_indices[np.argmin(dists)]
-            exemplars[cluster_id] = df.iloc[best_idx].get("title", f"Paper {best_idx}")
-
-        df["is_semantic_exemplar"] = False
-        for cluster_id, title in exemplars.items():
-            df.loc[(df["semantic_community"] == cluster_id) & (df["title"] == title), "is_semantic_exemplar"] = True
-
         return df
 
 

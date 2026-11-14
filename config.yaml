@@ -25,7 +25,7 @@ acquisition:
   rate_limit_pause_sec: 0.1
 
 deduplication:
-  lsh_threshold: 0.85
+  lsh_threshold: 0.8
   num_perm: 128
   shingle_size: 3
   fields_to_check:
@@ -36,6 +36,7 @@ deduplication:
 representation:
   specter:
     model_name: "allenai/specter2_base"
+    adapter_name: "allenai/specter2" # proximity adapter (similarity/clustering); null = base model only
     batch_size: 16
     max_token_length: 512
     device: "auto" # "cuda", "cpu", or "auto"
@@ -50,43 +51,31 @@ representation:
     top_k_neighbors: 10
   citation_graph:
     directed: true
-    pagerank_alpha: 0.85
-    pagerank_max_iter: 100
-    hits_max_iter: 100
 
 # Phase 3: Community & Frontier Detection
 detection:
   semantic_clustering:
-    algorithm: "kmeans" # "kmeans", "spectral"
     init: "k-means++"
     n_clusters: 8
     max_iter: 300
     random_state: 42
-  graph_clustering:
-    algorithm: "spectral" # "spectral", "louvain"
-    n_clusters: 8
-    louvain_resolution: 1.0
+  graph_clustering: # Louvain; number of communities is chosen automatically
+    resolution: 1.0 # > 1: more, smaller communities; < 1: fewer, larger ones
     random_state: 42
   frontier_scoring:
-    semantic_sim_threshold: 0.65
-    citation_connectivity_threshold: 0.10
+    community_col: "citation_community" # citation silos (Louvain); "semantic_community" compares k-means topic clusters
+    similarity_percentile: 95 # "highly similar" = top 5% of similarities (adapts to the embedding space)
+    max_density_ratio: 1.0 # "low citation" = pair density <= this x whole-graph density
     min_community_size: 3
     top_k_frontiers: 10
 
 # Phase 4: Validation & Analysis
 validation:
-  bootstrap:
+  similarity_ci: # bootstrap confidence interval of each frontier's mean similarity
     n_iterations: 500
     subsample_ratio: 0.80
-    confidence_interval: 0.95
+    confidence: 0.95
     random_state: 42
-  hypothesis_test:
+  hypothesis_test: # permutation test of the citation gap
+    n_permutations: 100
     alpha: 0.05
-    test_type: "permutation" # "permutation" or "mann_whitney"
-
-# Dashboard & Visualizations
-visualization:
-  theme: "plotly_white"
-  network_spring_layout_iterations: 50
-  save_static_plots: true
-  save_interactive_html: true

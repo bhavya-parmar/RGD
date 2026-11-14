@@ -9,7 +9,7 @@
 
 ## 📌 Motivation
 
-Researchers entering an unfamiliar or rapidly evolving field struggle to efficiently sift through thousands of papers, separate broad surveys from seminal breakthroughs, and discover genuine research gaps. Relying on raw citation counts introduces strong historical bias toward older works, while keyword searches fail to capture cross-disciplinary overlap.
+Researchers entering an unfamiliar or rapidly evolving field struggle to efficiently sift through thousands of papers and discover genuine research gaps. Relying on raw citation counts introduces strong historical bias toward older works, while keyword searches fail to capture cross-disciplinary overlap.
 
 This leaves researchers blind to **isolated academic silos**, where distinct communities solve the same fundamental problem without citing each other, making pinpointing unaddressed research frontiers a slow, manual process.
 
@@ -21,22 +21,38 @@ To address these limitations, **RGD** combines dense semantic similarity with ci
 
 The pipeline is organized into four sequential phases:
 
-```
-[Phase 1: Retrieval & Prep]
-Research Query ──> OpenAlex API ──> Citation Expansion ──> MinHash + LSH Deduplication ──> Research Corpus
-                                                                                               │
-[Phase 2: Dual-View Representation]                                                          │
-      ┌────────────────────────────────────────────────────────────────────────────────────────┘
-      ├──> SPECTER2 Embeddings ──> PCA/SVD Reduction ──> FAISS Semantic Index
-      └──> Directed Citation Graph ──> PageRank (Seminal Influence) + HITS (Hubs & Authorities)
-                                                                                               │
-[Phase 3: Community & Frontier Detection]                                                     │
-      ├──> k-means++ (Semantic Communities) <──┐                                              │
-      │                                        ├──> Cross-Community Discrepancy Scoring ──────┤
-      └──> Spectral / Louvain (Citation Comm.) <┘   (High Semantic Sim + Low Citation Density)│
-                                                                                               │
-[Phase 4: Validation & Reporting]                                                             │
-      └──> Bootstrap Resampling (Stability) ──> Permutation Hypothesis Testing ──> Landscape & Gap Report
+```mermaid
+flowchart TD
+    subgraph P1["Phase 1: Retrieval & Prep"]
+        direction LR
+        Q["Research Query"] --> OA["OpenAlex API"] --> CE["Citation Expansion"] --> DD["MinHash + LSH Deduplication"] --> RC[("Research Corpus")]
+    end
+
+    subgraph P2["Phase 2: Dual-View Representation"]
+        direction LR
+        EMB["SPECTER2 Embeddings"] --> PCA["PCA/SVD Reduction"] --> FAISS[("FAISS Semantic Index")]
+        CG["Directed Citation Graph"]
+    end
+
+    subgraph P3["Phase 3: Community & Frontier Detection"]
+        KM["k-means++<br/>(Semantic Communities)"]
+        SL["Louvain<br/>(Citation Communities)"]
+        DS["Cross-Community Discrepancy Scoring<br/>(High Semantic Sim + Low Citation Density)"]
+        SL -->|"communities compared"| DS
+        KM -.->|"alternative grouping"| DS
+    end
+
+    subgraph P4["Phase 4: Validation & Reporting"]
+        direction LR
+        BS["Similarity Confidence Interval<br/>(Bootstrap)"] --> PT["Permutation Test<br/>(Topic Overlap)"] --> REP[/"HTML Gap Report"/]
+    end
+
+    RC --> EMB
+    RC --> CG
+    FAISS --> KM
+    CG --> SL
+    CG -->|"citation density"| DS
+    DS --> BS
 ```
 
 1. **Phase 1: Literature Retrieval & Preparation**
@@ -48,18 +64,19 @@ Research Query ──> OpenAlex API ──> Citation Expansion ──> MinHash +
    - Encodes paper titles and abstracts into 768-dimensional dense vectors with **SPECTER2**.
    - Applies PCA/SVD to compress embeddings to 64 dimensions while preserving dominant variance.
    - Builds a high-speed **FAISS** index for sub-millisecond nearest neighbor search.
-   - Constructs a directed citation network; calculates **PageRank** to highlight seminal works and **HITS** Hub/Authority scores to isolate surveys vs core innovations.
+   - Constructs a directed citation network from citations between corpus papers (paper → paper it cites).
 
 3. **Phase 3: Community & Frontier Detection**
    - Applies **k-means++** clustering on reduced semantic vectors to define topical boundaries.
-   - Applies **Spectral Clustering / Louvain Modularity** on the citation graph to isolate citation silos.
-   - Calculates cross-community **Frontier Gap Scores**: $\text{Score} = \text{Sim}_{\text{semantic}} \times (1 - \text{Density}_{\text{citation}})$.
-   - Surfaces isolated paper pairs working on identical problems without reciprocal citations.
+   - Applies **Louvain modularity** on the citation graph to isolate citation silos (number of communities chosen automatically).
+   - Calculates cross-community **Frontier Gap Scores** between citation communities (Louvain silos; configurable): $\text{Score} = \text{Sim}_{\text{semantic}} \times (1 - \text{Density}_{\text{citation}})$, where similarity is the mean cosine over all paper pairs and density counts citations in both directions.
+   - "Highly similar" is a percentile of observed similarities (default top 5%), so the cutoff adapts to the embedding space.
+   - Surfaces isolated paper pairs working on identical problems without citing each other, using FAISS range search so only pairs above the cutoff are examined.
 
-4. **Phase 4: Validation & Analytical Reporting**
-   - Validates pattern stability via non-parametric **Bootstrap Resampling**.
-   - Tests null hypothesis $H_0$ using **Permutation Testing** against rewired random graph models.
-   - Outputs interactive network visualizations, 2D semantic landscape maps, discrepancy heatmaps, and a standalone HTML gap discovery report.
+4. **Phase 4: Validation & Reporting**
+   - Computes a **similarity confidence interval** for each frontier by bootstrap resampling of papers (communities stay fixed).
+   - Tests $H_0$: "these two citation silos are no more similar in topic than random groups" with a **permutation test** that shuffles embeddings across papers.
+   - Writes a single self-contained HTML gap report.
 
 ---
 
@@ -90,7 +107,7 @@ Project/RGD/
     │   ├── __init__.py
     │   ├── embed_specter.py       # SPECTER2 generation and PCA dimensionality reduction
     │   ├── faiss_index.py         # Construction of the semantic similarity index
-    │   └── citation_graph.py      # Citation graph construction, PageRank, and HITS
+    │   └── citation_graph.py      # Citation graph construction
     ├── phase3_detection/          # Community & Frontier Detection
     │   ├── __init__.py
     │   ├── semantic_cluster.py    # Detection of semantic communities
@@ -98,8 +115,8 @@ Project/RGD/
     │   └── frontier_scoring.py    # Community comparison to isolate candidate frontiers
     ├── phase4_validation/         # Validation & Analysis
     │   ├── __init__.py
-    │   ├── hypothesis_test.py     # Bootstrap resampling and statistical pattern validation
-    │   └── visualization.py       # Network visualization and analytical dashboard logic
+    │   ├── hypothesis_test.py     # Similarity confidence interval and permutation test
+    │   └── report.py              # HTML gap report
     └── pipeline.py                # Main orchestrator to run phases sequentially
 ```
 
@@ -129,29 +146,40 @@ pip install -r requirements.txt
 
 ### 2. Configure Environment
 
-Copy `.env.example` to `.env` and configure your OpenAlex credentials:
+Create a `.env` file in the project root with your OpenAlex key:
 
-```bash
-cp .env.example .env
-```
-
-Edit `.env`:
 ```ini
 OPENALEX_API_KEY=your_openalex_api_key
-OPENALEX_EMAIL=your_email@example.com
 ```
+
+Since Feb 13, 2026, OpenAlex requires a free API key (100,000 credits/day). Without one, access is capped at 100 credits/day. An email address is no longer needed. See [docs/openalex_api.md](docs/openalex_api.md) for request formats, response structure and parsing details.
 
 ### 3. Run the Pipeline
 
-Execute the full end-to-end pipeline with a live search query:
+Run from the project root (paths in `config.yaml` are relative to it):
 
 ```bash
-python src/pipeline.py --query "physics informed neural networks" --max-seeds 40
+python src/pipeline.py \
+  --query "anisotropy in large language models" \
+  --must-include anisotropy "language model|transformer" \
+  --max-seeds 50
 ```
 
-#### Offline / Mock Mode (Instant Zero-Dependency Verification)
+- `--must-include`: every term must appear in the title or abstract of seed papers; `|` separates alternatives, quotes mark phrases.
+- `--filter-expanded`: also apply `--must-include` to papers added by citation expansion.
+- Prefix with `HF_HUB_OFFLINE=1` to skip Hugging Face update checks once SPECTER2 is downloaded.
 
-To test the entire pipeline locally without downloading SPECTER2 model weights or hitting external APIs:
+Open the results:
+
+```bash
+xdg-open reports/frontier_report.html   # Linux (macOS: open, Windows: start)
+```
+
+The tables behind the report are `reports/validated_frontiers.csv` and `reports/isolated_paper_pairs.csv`.
+
+#### Mock Mode
+
+Runs the pipeline on a synthetic corpus without calling OpenAlex (SPECTER2 is still loaded). It writes to the same `reports/` folder:
 
 ```bash
 python src/pipeline.py --query "graph neural networks" --max-seeds 30 --mock
@@ -166,17 +194,15 @@ python src/pipeline.py --query "graph neural networks" --max-seeds 30 --mock
 | **`acquisition`** | `default_query`, `max_seed_papers`, `citation_expansion_depth` | Governs OpenAlex seed retrieval and expansion scope |
 | **`deduplication`** | `lsh_threshold`, `num_perm`, `shingle_size` | MinHash Jaccard threshold and permutation settings |
 | **`representation`** | `specter.model_name`, `pca.n_components`, `faiss.metric` | SPECTER2 model, PCA target dimensions (default 64), FAISS distance |
-| **`detection`** | `semantic_clustering.n_clusters`, `graph_clustering.algorithm` | k-means++ and Spectral/Louvain community parameters |
-| **`detection`** | `frontier_scoring.semantic_sim_threshold`, `citation_connectivity_threshold` | Cutoffs for isolating high-potential research gaps |
-| **`validation`** | `bootstrap.n_iterations`, `hypothesis_test.alpha` | Non-parametric stability iterations and p-value significance |
+| **`detection`** | `semantic_clustering.n_clusters`, `graph_clustering.resolution` | k-means++ and Louvain community parameters |
+| **`detection`** | `frontier_scoring.community_col`, `similarity_percentile`, `max_density_ratio` | Which communities are compared, paper-pair similarity cutoff, and "low citation" relative to the graph average |
+| **`validation`** | `similarity_ci.n_iterations`, `hypothesis_test.n_permutations`, `hypothesis_test.alpha` | Bootstrap samples for the similarity CI, permutations and p-value cutoff |
 
 ---
 
 ## 📊 Outputs & Reports
 
 Upon completion, all analytical artifacts are organized in `reports/` and `data/`:
-- `reports/frontier_report.html`: Interactive summary dashboard detailing isolated research gaps.
-- `reports/citation_network.html`: Interactive citation network with community nodes.
-- `reports/validated_frontiers.csv`: Ranked candidate frontiers with bootstrap confidence intervals and empirical p-values.
-- `reports/semantic_landscape.png`: 2D PCA projection of semantic communities.
-- `reports/frontier_discrepancy_matrix.png`: Heatmap of cross-community semantic similarity vs citation density.
+- `reports/frontier_report.html`: Self-contained gap report: community frontiers (labelled by a representative paper, with similarity CI and p-value) and isolated paper pairs.
+- `reports/validated_frontiers.csv`: Ranked community frontiers with similarity confidence intervals and permutation-test p-values.
+- `reports/isolated_paper_pairs.csv`: Highly similar paper pairs with no citation between them.

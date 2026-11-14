@@ -35,47 +35,98 @@ def reconstruct_abstract(abstract_inverted_index: Optional[Dict[str, List[int]]]
 
 class OpenAlexFetcher:
     """
-    Client for querying OpenAlex API with automatic polite-pool identification,
+    Client for querying OpenAlex API with API key authentication,
     pagination, citation expansion, and parsing into structured DataFrames.
+
+    Since Feb 13, 2026, OpenAlex requires an API key (free, 100k credits/day).
+    Without one, requests are limited to 100 credits/day and then fail with 409.
+    The old email-based "polite pool" (mailto) is no longer used.
     """
 
     def __init__(
         self,
         api_key: Optional[str] = None,
-        email: Optional[str] = None,
         base_url: str = "https://api.openalex.org"
     ):
         self.api_key = api_key or os.getenv("OPENALEX_API_KEY")
-        self.email = email or os.getenv("OPENALEX_EMAIL")
         self.base_url = base_url.rstrip("/")
+        self.headers = {"User-Agent": "RGD-ResearchGapDiscovery/1.0"}
 
-        self.headers = {
-            "User-Agent": f"RGD-ResearchGapDiscovery/1.0 (mailto:{self.email})"
-        }
-        if self.api_key:
-            self.headers["Authorization"] = f"Bearer {self.api_key}"
+        if not self.api_key:
+            logger.warning(
+                "OPENALEX_API_KEY is not set. OpenAlex limits keyless access to "
+                "100 credits/day; get a free key from your OpenAlex account."
+            )
+
+    @staticmethod
+    def build_required_terms_filter(must_include: Optional[List[str]]) -> Optional[str]:
+        """
+        Build an OpenAlex filter requiring every term group to appear in the
+        title or abstract.
+
+        Each list item is one required group. Use "|" inside an item for
+        alternatives (any one of them is enough). Multi-word terms are matched
+        as exact phrases.
+
+        Example:
+            --must-include anisotropy "language model|transformer"
+            ["anisotropy", "language model|transformer"]
+            -> title_and_abstract.search:anisotropy AND ("language model" OR transformer)
+               (must contain "anisotropy" plus at least one of the alternatives)
+        """
+        if not must_include:
+            return None
+
+        groups = []
+        for item in must_include:
+            if "," in item:
+                raise ValueError(f"Commas are not allowed in required terms: '{item}'")
+            
+            alternatives = [t.strip() for t in item.split("|") if t.strip()]
+            # Find multi-word terms and quote them for exact phrase matching
+            quoted = [f'"{t}"' if " " in t else t for t in alternatives]
+            
+            if not quoted:
+                continue
+            
+            groups.append(quoted[0] if len(quoted) == 1 else "(" + " OR ".join(quoted) + ")")
+
+        if not groups:
+            return None
+        return "title_and_abstract.search:" + " AND ".join(groups)
 
     def fetch_papers_by_query(
         self,
         query: str,
         max_results: int = 50,
-        per_page: int = 25
+        per_page: int = 25,
+        must_include: Optional[List[str]] = None
     ) -> List[Dict[str, Any]]:
         """
         Query OpenAlex works endpoint using keyword/concept search.
+
+        `query` ranks results by relevance (loose, full-text match).
+        `must_include` adds a hard filter: every group must appear in the
+        title or abstract (see build_required_terms_filter).
         """
         papers: List[Dict[str, Any]] = []
         page = 1
         url = f"{self.base_url}/works"
+        required_filter = self.build_required_terms_filter(must_include)
 
         logger.info(f"Querying OpenAlex for: '{query}' (Target: {max_results} papers)...")
+        if required_filter:
+            logger.info(f"Required terms filter: {required_filter}")
 
+        # Fetch papers in pages until we reach max_results or no more results
         while len(papers) < max_results:
             params = {
                 "search": query,
                 "per_page": min(per_page, max_results - len(papers)),
                 "page": page
             }
+            if required_filter:
+                params["filter"] = required_filter
             if self.api_key:
                 params["api_key"] = self.api_key
 
@@ -107,12 +158,17 @@ class OpenAlexFetcher:
         self,
         seed_papers: List[Dict[str, Any]],
         max_references_per_paper: int = 15,
-        max_total_expanded: int = 100
+        max_total_expanded: int = 100,
+        must_include: Optional[List[str]] = None
     ) -> List[Dict[str, Any]]:
         """
         Expand the initial corpus by fetching referenced works and related works
         to bridge citation and cross-disciplinary gaps.
+
+        If `must_include` is given, expanded papers must also contain the
+        required terms in their title or abstract; the rest are skipped.
         """
+        required_filter = self.build_required_terms_filter(must_include)
         logger.info(f"Expanding corpus via citation links and related works...")
         expanded_ids = set()
         seed_ids = {p["id"] for p in seed_papers}
@@ -120,7 +176,8 @@ class OpenAlexFetcher:
         for paper in seed_papers:
             # OpenAlex references
             refs = paper.get("referenced_works", [])[:max_references_per_paper]
-            # OpenAlex related works
+            
+            # OpenAlex related works (half of max_references_per_paper to avoid too many)
             related = paper.get("related_works", [])[:max_references_per_paper // 2]
 
             for ref_id in refs + related:
@@ -140,11 +197,17 @@ class OpenAlexFetcher:
         for i in range(0, len(id_list), batch_size):
             batch = id_list[i : i + batch_size]
             # Query multiple IDs using pipe delimiter
+            # convert "https://openalex.org/W4404784303" to "W4404784303" 
             pipe_ids = "|".join([item.replace("https://openalex.org/", "") for item in batch])
-            url = f"{self.base_url}/works?filter=openalex_id:{pipe_ids}"
+            url = f"{self.base_url}/works"
+            id_filter = f"openalex_id:{pipe_ids}"
 
             try:
-                params = {"per_page": batch_size}
+                params = {
+                    # Comma joins filters with AND in OpenAlex
+                    "filter": f"{id_filter},{required_filter}" if required_filter else id_filter,
+                    "per_page": batch_size
+                }
                 if self.api_key:
                     params["api_key"] = self.api_key
                 resp = requests.get(url, headers=self.headers, params=params, timeout=15)

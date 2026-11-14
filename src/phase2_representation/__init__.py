@@ -1,7 +1,7 @@
 """
 Phase 2: Semantic & Citation Representation
 Generates SPECTER2 embeddings, performs PCA/SVD dimensionality reduction,
-builds FAISS similarity indices, and constructs directed citation graphs with PageRank & HITS.
+builds FAISS similarity indices, and constructs directed citation graphs.
 """
 
 from .embed_specter import SpecterEmbedder, DimensionalityReducer

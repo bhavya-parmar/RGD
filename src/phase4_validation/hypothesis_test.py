@@ -1,191 +1,162 @@
 """
-Statistical Validation and Hypothesis Testing for Research Frontier Detection.
-Applies bootstrap resampling to estimate frontier stability and conducts permutation
-testing against random graph null models to guarantee statistical significance.
+Statistical Validation of Research Frontiers.
+1. Similarity confidence interval: bootstrap resampling of papers to measure how
+   stable each frontier's mean semantic similarity is.
+2. Permutation test: checks whether two communities are more similar in topic
+   than chance.
 """
 
 import logging
-from typing import Dict, List, Any, Tuple, Optional
+from typing import Dict, List, Tuple
 import numpy as np
 import pandas as pd
 import networkx as nx
+
+from src.phase3_detection.frontier_scoring import FrontierScorer
 
 logger = logging.getLogger(__name__)
 
 
 class StatisticalValidator:
-    """
-    Validates detected research frontiers through non-parametric bootstrap resampling
-    and edge-permutation null hypothesis tests.
-    """
+    """Adds confidence intervals and p-values to scored frontier pairs."""
 
     def __init__(
         self,
-        n_iterations: int = 200,
+        n_iterations: int = 500,
         subsample_ratio: float = 0.80,
+        confidence: float = 0.95,
         alpha: float = 0.05,
         random_state: int = 42
     ):
+        """
+        n_iterations: bootstrap samples for the similarity confidence interval.
+        subsample_ratio: size of each bootstrap sample relative to the corpus.
+        confidence: confidence level of the interval (0.95 -> 2.5th to 97.5th percentile).
+        alpha: p-value cutoff for statistical significance.
+        """
         self.n_iterations = n_iterations
         self.subsample_ratio = subsample_ratio
+        self.confidence = confidence
         self.alpha = alpha
         self.random_state = random_state
 
-    def bootstrap_frontier_stability(
+    def similarity_confidence_interval(
         self,
         frontier_df: pd.DataFrame,
         corpus_df: pd.DataFrame,
         embeddings: np.ndarray,
-        citation_graph: nx.Graph
+        community_col: str = "citation_community"
     ) -> pd.DataFrame:
         """
-        Estimate stability of candidate frontiers across random subsamples of papers.
-        Calculates empirical confidence intervals and selection persistence frequency.
+        Confidence interval for each frontier's mean semantic similarity.
+        Resamples papers with replacement, recomputes the similarity of the same
+        (fixed) communities, and takes percentiles of the results. Communities are
+        not re-detected, so this measures how stable the similarity is, not whether
+        the frontier would be found again.
         """
         if frontier_df.empty or len(corpus_df) < 5:
-            logger.warning("Insufficient data for bootstrap resampling.")
+            logger.warning("Insufficient data for similarity confidence intervals.")
             return frontier_df
 
         rng = np.random.default_rng(self.random_state)
-        n_samples = len(corpus_df)
-        sample_size = max(4, int(n_samples * self.subsample_ratio))
+        n_papers = len(corpus_df)
+        sample_size = max(4, int(n_papers * self.subsample_ratio))
+        labels = corpus_df[community_col].to_numpy()
+        pairs = list(zip(frontier_df["community_a"].astype(int), frontier_df["community_b"].astype(int)))
+        samples: Dict[Tuple[int, int], List[float]] = {p: [] for p in pairs}
 
-        logger.info(
-            f"Running {self.n_iterations} bootstrap resampling iterations "
-            f"(Subsample ratio: {self.subsample_ratio:.0%}, Size: {sample_size}/{n_samples})..."
-        )
-
-        # Track bootstrap scores for each top community pair
-        pair_scores: Dict[Tuple[int, int], List[float]] = {}
-        for _, row in frontier_df.iterrows():
-            pair = (int(row["community_a"]), int(row["community_b"]))
-            pair_scores[pair] = []
-
+        logger.info(f"Similarity CI: {self.n_iterations} bootstrap samples of {sample_size}/{n_papers} papers...")
         for _ in range(self.n_iterations):
-            sub_indices = rng.choice(n_samples, size=sample_size, replace=True)
-            sub_df = corpus_df.iloc[sub_indices].reset_index(drop=True)
-            sub_emb = embeddings[sub_indices]
+            idx = rng.choice(n_papers, size=sample_size, replace=True)
+            sub_labels, sub_emb = labels[idx], embeddings[idx]
+            for ca, cb in pairs:
+                in_a, in_b = sub_labels == ca, sub_labels == cb
+                # Skip samples where one community has no papers
+                if in_a.any() and in_b.any():
+                    samples[(ca, cb)].append(FrontierScorer.community_similarity(sub_emb[in_a], sub_emb[in_b]))
 
-            for (ca, cb) in pair_scores.keys():
-                idx_a = np.where(sub_df["citation_community"] == ca)[0]
-                idx_b = np.where(sub_df["citation_community"] == cb)[0]
-
-                if len(idx_a) == 0 or len(idx_b) == 0:
-                    continue
-
-                # Compute mean semantic similarity on bootstrap sample
-                sim = float(np.mean(np.dot(sub_emb[idx_a], sub_emb[idx_b].T)))
-                pair_scores[(ca, cb)].append(sim)
-
-        # Compute mean, standard error, and 95% Confidence Intervals
-        ci_lower = []
-        ci_upper = []
-        stability_pct = []
-
-        for _, row in frontier_df.iterrows():
-            pair = (int(row["community_a"]), int(row["community_b"]))
-            scores = pair_scores.get(pair, [])
-            if scores:
-                low = float(np.percentile(scores, 100 * (self.alpha / 2)))
-                high = float(np.percentile(scores, 100 * (1 - self.alpha / 2)))
-                ci_lower.append(low)
-                ci_upper.append(high)
-                stability_pct.append(len(scores) / self.n_iterations)
-            else:
-                ci_lower.append(row["mean_semantic_similarity"])
-                ci_upper.append(row["mean_semantic_similarity"])
-                stability_pct.append(0.0)
-
-        validated_df = frontier_df.copy()
-        validated_df["bootstrap_ci_95_low"] = ci_lower
-        validated_df["bootstrap_ci_95_high"] = ci_upper
-        validated_df["bootstrap_persistence"] = stability_pct
-
-        logger.info("Bootstrap stability analysis completed.")
-        return validated_df
+        tail = 100 * (1 - self.confidence) / 2
+        result = frontier_df.copy()
+        result["similarity_ci_low"] = [np.percentile(samples[p], tail) if samples[p] else np.nan for p in pairs]
+        result["similarity_ci_high"] = [np.percentile(samples[p], 100 - tail) if samples[p] else np.nan for p in pairs]
+        # Fraction of bootstrap samples that contained both communities (low = unreliable CI)
+        result["ci_sample_coverage"] = [len(samples[p]) / self.n_iterations for p in pairs]
+        return result
 
     def permutation_test_significance(
         self,
-        observed_frontier_df: pd.DataFrame,
+        frontier_df: pd.DataFrame,
         corpus_df: pd.DataFrame,
         embeddings: np.ndarray,
-        citation_graph: nx.Graph,
-        n_permutations: int = 100
+        n_permutations: int = 100,
+        community_col: str = "citation_community"
     ) -> pd.DataFrame:
         """
-        Tests null hypothesis H0: The observed frontier score is an artifact of random network topology.
-        Permutes citation graph edges to generate empirical null distribution.
+        H0: the two communities are no more similar in topic than two random groups
+        of the same sizes.
+        Shuffles which embedding belongs to which paper (communities and citations
+        stay fixed), recomputes the frontier score, and reports
+        p = fraction of shuffled scores >= observed score.
+        p-values are Benjamini-Hochberg adjusted across all tested pairs, and a pair
+        is a frontier if it is significant after adjustment and has low citation.
+        Communities come from citations and the null from the embeddings, so the
+        test is not circular.
         """
-        if observed_frontier_df.empty or citation_graph.number_of_edges() == 0:
-            return observed_frontier_df
+        if frontier_df.empty:
+            return frontier_df
 
-        logger.info(f"Conducting edge-permutation hypothesis tests ({n_permutations} permutations)...")
+        logger.info(f"Permutation test: {n_permutations} shuffles of paper embeddings...")
         rng = np.random.default_rng(self.random_state)
-        nodes = list(citation_graph.nodes())
-        n_nodes = len(nodes)
+        labels = corpus_df[community_col].to_numpy()
+        # Shuffled paper order is shared by all pairs
+        perms = [rng.permutation(len(embeddings)) for _ in range(n_permutations)]
+
         p_values = []
+        for _, row in frontier_df.iterrows():
+            in_a, in_b = labels == row["community_a"], labels == row["community_b"]
+            null_scores = [
+                FrontierScorer.community_similarity(embeddings[perm][in_a], embeddings[perm][in_b])
+                * (1.0 - row["citation_density"])
+                for perm in perms
+            ]
+            # +1 in numerator and denominator: the observed arrangement counts as one permutation
+            n_extreme = sum(s >= row["frontier_score"] for s in null_scores)
+            p_values.append((n_extreme + 1) / (n_permutations + 1))
 
-        # Generate null frontier scores via randomized degree-preserving or rewiring null models
-        for _, row in observed_frontier_df.iterrows():
-            ca, cb = int(row["community_a"]), int(row["community_b"])
-            obs_score = row["frontier_score"]
+        result = frontier_df.copy()
+        result["p_value"] = p_values
+        result["p_value_adjusted"] = benjamini_hochberg(np.array(p_values))
+        result["statistically_significant"] = result["p_value_adjusted"] < self.alpha
+        result["is_frontier"] = result["statistically_significant"] & result["low_citation"]
+        return result
 
-            nodes_a = set(corpus_df.loc[corpus_df["citation_community"] == ca, "id"].astype(str))
-            nodes_b = set(corpus_df.loc[corpus_df["citation_community"] == cb, "id"].astype(str))
 
-            if not nodes_a or not nodes_b:
-                p_values.append(1.0)
-                continue
-
-            null_scores = []
-            for _ in range(n_permutations):
-                # Shuffle community labels or shuffle network connectivity
-                permuted_nodes = list(rng.permutation(nodes))
-                mapping = dict(zip(nodes, permuted_nodes))
-                perm_graph = nx.relabel_nodes(citation_graph, mapping, copy=True)
-
-                cross_edges = 0
-                for u in nodes_a:
-                    if u in perm_graph:
-                        cross_edges += len(set(perm_graph.neighbors(u)).intersection(nodes_b))
-
-                possible = len(nodes_a) * len(nodes_b)
-                perm_density = cross_edges / possible if possible > 0 else 0.0
-                null_score = row["mean_semantic_similarity"] * (1.0 - perm_density)
-                null_scores.append(null_score)
-
-            # Empirical p-value
-            greater_or_equal = sum(1 for s in null_scores if s >= obs_score)
-            p_val = (greater_or_equal + 1) / (n_permutations + 1)
-            p_values.append(float(p_val))
-
-        result_df = observed_frontier_df.copy()
-        result_df["p_value"] = p_values
-        result_df["statistically_significant"] = result_df["p_value"] < self.alpha
-
-        logger.info("Hypothesis testing completed.")
-        return result_df
+def benjamini_hochberg(p_values: np.ndarray) -> np.ndarray:
+    """
+    Benjamini-Hochberg adjusted p-values (controls the false discovery rate).
+    Sort p ascending; adjusted p_(i) = min over k >= i of p_(k) * m / k, capped at 1.
+    """
+    m = len(p_values)
+    order = np.argsort(p_values)
+    scaled = p_values[order] * m / np.arange(1, m + 1)
+    # Running minimum from the largest p downwards keeps adjusted p-values monotone
+    adjusted_sorted = np.minimum(np.minimum.accumulate(scaled[::-1])[::-1], 1.0)
+    adjusted = np.empty(m)
+    adjusted[order] = adjusted_sorted
+    return adjusted
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-    mock_frontiers = pd.DataFrame([{
-        "community_a": 0, "community_b": 1,
-        "mean_semantic_similarity": 0.82,
-        "citation_density": 0.01,
-        "frontier_score": 0.8118
-    }])
-    mock_corpus = pd.DataFrame({
-        "id": [f"w_{i}" for i in range(10)],
-        "citation_community": [0]*5 + [1]*5
-    })
-    mock_emb = np.random.randn(10, 8)
-    mock_emb /= np.linalg.norm(mock_emb, axis=1, keepdims=True)
-    g = nx.erdos_renyi_graph(10, 0.1, seed=42)
-    nx.relabel_nodes(g, {i: f"w_{i}" for i in range(10)}, copy=False)
+    rng = np.random.default_rng(0)
+    corpus = pd.DataFrame({"id": [f"w_{i}" for i in range(10)], "citation_community": [0] * 5 + [1] * 5})
+    emb = rng.normal(size=(10, 8))
+    emb /= np.linalg.norm(emb, axis=1, keepdims=True)
+    g = nx.relabel_nodes(nx.erdos_renyi_graph(10, 0.2, seed=42, directed=True), lambda i: f"w_{i}")
 
+    frontiers = FrontierScorer(min_community_size=2).score_community_frontiers(corpus, emb, g, "citation_community")
     validator = StatisticalValidator(n_iterations=50)
-    boot = validator.bootstrap_frontier_stability(mock_frontiers, mock_corpus, mock_emb, g)
-    perm = validator.permutation_test_significance(boot, mock_corpus, mock_emb, g, n_permutations=50)
-    print("Statistical Validation Results:")
-    print(perm[["community_a", "community_b", "frontier_score", "bootstrap_persistence", "p_value", "statistically_significant"]])
+    out = validator.similarity_confidence_interval(frontiers, corpus, emb)
+    out = validator.permutation_test_significance(out, corpus, emb, n_permutations=50)
+    print(out[["community_a", "community_b", "frontier_score", "similarity_ci_low",
+               "similarity_ci_high", "p_value", "p_value_adjusted", "is_frontier"]])

@@ -5,10 +5,12 @@ by isolating community and paper pairs exhibiting High Semantic Similarity but L
 """
 
 import logging
-from typing import Dict, List, Tuple, Any, Optional
+from typing import Set
 import numpy as np
 import pandas as pd
 import networkx as nx
+
+from src.phase2_representation.faiss_index import SemanticIndex
 
 logger = logging.getLogger(__name__)
 
@@ -17,19 +19,68 @@ class FrontierScorer:
     """
     Computes discrepancy scores between semantic similarity and citation network density
     to discover candidate research frontiers.
+
+    Cutoffs are relative, not fixed, so they adapt to the corpus: paper similarity
+    uses a percentile of observed similarities, and "low citation" compares a pair's
+    density with the average density of the whole citation graph.
     """
 
     def __init__(
         self,
-        semantic_sim_threshold: float = 0.65,
-        citation_connectivity_threshold: float = 0.10,
+        similarity_percentile: float = 95.0,
+        max_density_ratio: float = 1.0,
         min_community_size: int = 3,
-        top_k_frontiers: int = 10
+        max_sampled_pairs: int = 1_000_000,
+        random_state: int = 42
     ):
-        self.semantic_sim_threshold = semantic_sim_threshold
-        self.citation_connectivity_threshold = citation_connectivity_threshold
+        """
+        similarity_percentile: a paper pair counts as "highly similar" if it is in the
+            top (100 - similarity_percentile)% of similarities, e.g. 95 -> top 5%.
+        max_density_ratio: a community pair is "low citation" if its citation density
+            is at most this multiple of the whole graph's density (1.0 = below average).
+        max_sampled_pairs: above this many paper pairs, the paper-level percentile is
+            estimated from a random sample instead of all pairs.
+        """
+        self.similarity_percentile = similarity_percentile
+        self.max_density_ratio = max_density_ratio
         self.min_community_size = min_community_size
-        self.top_k_frontiers = top_k_frontiers
+        self.max_sampled_pairs = max_sampled_pairs
+        self.random_state = random_state
+
+
+    @staticmethod
+    def community_similarity(emb_a: np.ndarray, emb_b: np.ndarray) -> float:
+        """
+        Mean cosine similarity over all |A| x |B| paper pairs.
+        For unit vectors, mean_ab(a . b) = mean(a) . mean(b), so this costs one
+        dot product instead of an |A| x |B| matrix.
+        """
+        return float(emb_a.mean(axis=0) @ emb_b.mean(axis=0))
+
+    @staticmethod
+    def citation_density(graph: nx.Graph, nodes_a: Set[str], nodes_b: Set[str]) -> float:
+        """Fraction of possible citations between A and B that exist (both directions)."""
+        possible = len(nodes_a) * len(nodes_b) * (2 if graph.is_directed() else 1)
+        if possible == 0:
+            return 0.0
+        # cut_size counts A -> B and B -> A edges for directed graphs
+        return nx.cut_size(graph, nodes_a & set(graph), nodes_b & set(graph)) / possible
+
+    def paper_similarity_threshold(self, embeddings: np.ndarray) -> float:
+        """Percentile of pairwise paper similarities (exact for small n, sampled for large n)."""
+        n = len(embeddings)
+        n_pairs = n * (n - 1) // 2
+        if n_pairs <= self.max_sampled_pairs:
+            iu = np.triu_indices(n, k=1)
+            sims = (embeddings @ embeddings.T)[iu]
+        else:
+            rng = np.random.default_rng(self.random_state)
+            i = rng.integers(0, n, self.max_sampled_pairs)
+            j = rng.integers(0, n, self.max_sampled_pairs)
+            keep = i != j
+            sims = np.einsum("ij,ij->i", embeddings[i[keep]], embeddings[j[keep]])
+        return float(np.percentile(sims, self.similarity_percentile))
+
 
     def score_community_frontiers(
         self,
@@ -39,129 +90,110 @@ class FrontierScorer:
         community_col: str = "citation_community"
     ) -> pd.DataFrame:
         """
-        Evaluate pairs of citation communities for frontier potential.
-        Frontier Score = Mean_Semantic_Sim * (1 - Citation_Edge_Density).
+        Score every pair of communities for frontier potential, sorted by score.
+        Frontier Score = Mean_Semantic_Sim * (1 - Citation_Density).
+        All pairs are returned so that validation can correct for testing all of them.
         """
         assert community_col in df.columns, f"Column '{community_col}' missing from DataFrame."
+        labels = df[community_col].to_numpy()
+        ids = df["id"].astype(str).to_numpy()
 
-        unique_communities = [
-            c for c in df[community_col].unique()
-            if c != -1 and (df[community_col] == c).sum() >= self.min_community_size
+        communities = [
+            c for c in pd.unique(labels)
+            if c != -1 and (labels == c).sum() >= self.min_community_size
         ]
+        logger.info(
+            f"Evaluating cross-community frontiers across {len(communities)} valid "
+            f"'{community_col}' communities..."
+        )
 
-        logger.info(f"Evaluating cross-community frontiers across {len(unique_communities)} valid communities...")
+        n = citation_graph.number_of_nodes()
+        possible = n * (n - 1) / (1 if citation_graph.is_directed() else 2)
+        graph_density = citation_graph.number_of_edges() / possible if possible else 0.0
+
+        members = {c: set(ids[labels == c]) for c in communities}
+        embs = {c: embeddings[labels == c] for c in communities}
 
         results = []
-        n_comm = len(unique_communities)
-
-        for i in range(n_comm):
-            c_a = unique_communities[i]
-            idx_a = df.index[df[community_col] == c_a].tolist()
-            nodes_a = set(df.loc[idx_a, "id"].astype(str))
-            emb_a = embeddings[idx_a]
-
-            for j in range(i + 1, n_comm):
-                c_b = unique_communities[j]
-                idx_b = df.index[df[community_col] == c_b].tolist()
-                nodes_b = set(df.loc[idx_b, "id"].astype(str))
-                emb_b = embeddings[idx_b]
-
-                # 1. Semantic Similarity: Mean pairwise dot product between communities
-                sim_matrix = np.dot(emb_a, emb_b.T)
-                mean_semantic_sim = float(np.mean(sim_matrix))
-                max_semantic_sim = float(np.max(sim_matrix))
-
-                # 2. Citation Connectivity: Cross-edges between communities
-                possible_edges = len(nodes_a) * len(nodes_b)
-                if citation_graph.is_directed():
-                    possible_edges *= 2
-
-                cross_edges = 0
-                for u in nodes_a:
-                    if u in citation_graph:
-                        neighbors = set(citation_graph.neighbors(u))
-                        cross_edges += len(neighbors.intersection(nodes_b))
-
-                citation_density = float(cross_edges / possible_edges) if possible_edges > 0 else 0.0
-
-                # 3. Frontier Score formulation
-                # High semantic similarity + low citation density = high frontier score
-                frontier_score = mean_semantic_sim * (1.0 - citation_density)
-
+        for i, c_a in enumerate(communities):
+            for c_b in communities[i + 1:]:
+                mean_sim = self.community_similarity(embs[c_a], embs[c_b])
+                density = self.citation_density(citation_graph, members[c_a], members[c_b])
                 results.append({
                     "community_a": int(c_a),
                     "community_b": int(c_b),
-                    "size_a": len(nodes_a),
-                    "size_b": len(nodes_b),
-                    "mean_semantic_similarity": mean_semantic_sim,
-                    "max_semantic_similarity": max_semantic_sim,
-                    "cross_citation_edges": cross_edges,
-                    "citation_density": citation_density,
-                    "frontier_score": frontier_score,
-                    "is_candidate_frontier": (
-                        mean_semantic_sim >= self.semantic_sim_threshold
-                        and citation_density <= self.citation_connectivity_threshold
-                    )
+                    "size_a": len(members[c_a]),
+                    "size_b": len(members[c_b]),
+                    "mean_semantic_similarity": mean_sim,
+                    "cross_citation_edges": nx.cut_size(citation_graph, members[c_a], members[c_b]),
+                    "citation_density": density,
+                    "density_ratio": density / graph_density if graph_density else 0.0,
+                    # High semantic similarity + low citation density = high frontier score
+                    "frontier_score": mean_sim * (1.0 - density),
                 })
 
         frontier_df = pd.DataFrame(results)
-        if not frontier_df.empty:
-            frontier_df = frontier_df.sort_values(by="frontier_score", ascending=False).reset_index(drop=True)
+        if frontier_df.empty:
+            return frontier_df
 
-        logger.info(f"Calculated frontier scores for {len(frontier_df)} community pairs.")
-        return frontier_df.head(self.top_k_frontiers)
+        frontier_df["low_citation"] = frontier_df["density_ratio"] <= self.max_density_ratio
+        logger.info(
+            f"Scored {len(frontier_df)} community pairs (graph density {graph_density:.4f}; "
+            f"{int(frontier_df['low_citation'].sum())} pairs at or below {self.max_density_ratio:g}x)."
+        )
+        return frontier_df.sort_values(by="frontier_score", ascending=False).reset_index(drop=True)
+
 
     def find_isolated_paper_pairs(
         self,
         df: pd.DataFrame,
         embeddings: np.ndarray,
+        semantic_index: SemanticIndex,
         citation_graph: nx.Graph,
         top_n_pairs: int = 20
     ) -> pd.DataFrame:
         """
-        Find individual paper pairs that have high semantic similarity
-        but have ZERO citation link between each other (potential disconnected silos).
+        Find paper pairs with high semantic similarity but no citation in either
+        direction (potential disconnected silos). Uses FAISS range search, so only
+        pairs above the similarity cutoff are ever examined (no n x n matrix).
         """
-        n_papers = len(df)
-        if n_papers < 2:
-            return pd.DataFrame()
-
-        sim_matrix = np.dot(embeddings, embeddings.T)
-        np.fill_diagonal(sim_matrix, -1.0)  # Exclude self-similarity
-
-        candidate_pairs = []
         ids = df["id"].astype(str).tolist()
+        if len(ids) < 2:
+            return pd.DataFrame()
+        assert semantic_index.paper_ids == ids, "FAISS index rows must match DataFrame row order."
+
+        threshold = self.paper_similarity_threshold(embeddings)
+        lims, sims, neighbors = semantic_index.range_search(embeddings, threshold)
+        logger.info(
+            f"Paper similarity cutoff (p{self.similarity_percentile:g}): {threshold:.4f}; "
+            f"FAISS returned {len(neighbors)} neighbor hits."
+        )
+
         titles = df["title"].tolist()
-        citations = df.get("cited_by_count", pd.Series(np.zeros(n_papers))).tolist()
+        citations = df.get("cited_by_count", pd.Series(0, index=df.index)).tolist()
 
-        # Undirected view for checking direct citation existence
-        undirected_g = citation_graph.to_undirected()
+        pairs = []
+        for i in range(len(ids)):
+            for k in range(lims[i], lims[i + 1]):
+                j = int(neighbors[k])
+                if j <= i:  # skip self-match and the mirrored (j, i) duplicate
+                    continue
+                u, v = ids[i], ids[j]
+                if citation_graph.has_edge(u, v) or citation_graph.has_edge(v, u):
+                    continue
+                pairs.append({
+                    "paper_1_id": u,
+                    "paper_1_title": titles[i],
+                    "paper_1_citations": citations[i],
+                    "paper_2_id": v,
+                    "paper_2_title": titles[j],
+                    "paper_2_citations": citations[j],
+                    "semantic_similarity": float(sims[k]),
+                })
 
-        for i in range(n_papers):
-            for j in range(i + 1, n_papers):
-                sim = sim_matrix[i, j]
-                if sim >= self.semantic_sim_threshold:
-                    u, v = ids[i], ids[j]
-                    has_citation = False
-                    if u in undirected_g and v in undirected_g:
-                        has_citation = undirected_g.has_edge(u, v)
-
-                    if not has_citation:
-                        candidate_pairs.append({
-                            "paper_1_id": u,
-                            "paper_1_title": titles[i],
-                            "paper_1_citations": citations[i],
-                            "paper_2_id": v,
-                            "paper_2_title": titles[j],
-                            "paper_2_citations": citations[j],
-                            "semantic_similarity": float(sim),
-                            "citation_edge_exists": False
-                        })
-
-        pairs_df = pd.DataFrame(candidate_pairs)
+        pairs_df = pd.DataFrame(pairs)
         if not pairs_df.empty:
             pairs_df = pairs_df.sort_values(by="semantic_similarity", ascending=False).reset_index(drop=True)
-
         return pairs_df.head(top_n_pairs)
 
 
@@ -172,20 +204,23 @@ if __name__ == "__main__":
     mock_df = pd.DataFrame({
         "id": [f"p_{i}" for i in range(n)],
         "title": [f"Study on Method {i}" for i in range(n)],
-        "citation_community": [0, 0, 0, 0, 0, 1, 1, 1, 1, 1],
+        "semantic_community": [0, 0, 0, 0, 0, 1, 1, 1, 1, 1],
         "cited_by_count": np.random.randint(5, 100, size=n)
     })
-    mock_emb = np.random.randn(n, 8)
+    mock_emb = np.random.randn(n, 8).astype(np.float32)
     mock_emb /= np.linalg.norm(mock_emb, axis=1, keepdims=True)
 
     g = nx.DiGraph()
-    for pid in mock_df["id"]:
-        g.add_node(pid)
-    # Add a few intra-community edges
+    g.add_nodes_from(mock_df["id"])
     g.add_edge("p_0", "p_1")
     g.add_edge("p_5", "p_6")
+    g.add_edge("p_7", "p_2")  # cross-community citation
+
+    index = SemanticIndex(dimension=8)
+    index.add(mock_emb, mock_df["id"].tolist())
 
     scorer = FrontierScorer(min_community_size=2)
-    comm_frontiers = scorer.score_community_frontiers(mock_df, mock_emb, g)
     print("Top Community Frontiers:")
-    print(comm_frontiers)
+    print(scorer.score_community_frontiers(mock_df, mock_emb, g))
+    print("Isolated Paper Pairs:")
+    print(scorer.find_isolated_paper_pairs(mock_df, mock_emb, index, g, top_n_pairs=5))

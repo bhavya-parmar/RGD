@@ -1,10 +1,10 @@
 """
-Phase 4: Validation & Analysis
-Executes bootstrap resampling and statistical hypothesis testing to validate
-the stability of detected research frontiers, and provides visualization logic.
+Phase 4: Validation & Reporting
+Adds similarity confidence intervals and permutation-test p-values to detected
+research frontiers, and writes the HTML gap report.
 """
 
 from .hypothesis_test import StatisticalValidator
-from .visualization import LandscapeVisualizer
+from .report import write_html_report
 
-__all__ = ["StatisticalValidator", "LandscapeVisualizer"]
+__all__ = ["StatisticalValidator", "write_html_report"]
