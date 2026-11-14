@@ -30,6 +30,7 @@ models/faiss_indices/*
 reports/
 *.html
 *.pdf
+!report/main.pdf
 !Data-science-project-proposal.pdf
 
 # IDE and OS files
