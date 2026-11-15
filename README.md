@@ -7,7 +7,7 @@
 
 ---
 
-## 📌 Motivation
+## Motivation
 
 Researchers entering an unfamiliar or rapidly evolving field struggle to efficiently sift through thousands of papers and discover genuine research gaps. Relying on raw citation counts introduces strong historical bias toward older works, while keyword searches fail to capture cross-disciplinary overlap.
 
@@ -17,7 +17,7 @@ To address these limitations, **RGD** combines dense semantic similarity with ci
 
 ---
 
-## 🏗️ System Architecture & Workflow
+## System Architecture & Workflow
 
 The pipeline is organized into four sequential phases:
 
@@ -30,14 +30,14 @@ flowchart TD
 
     subgraph P2["Phase 2: Dual-View Representation"]
         direction LR
-        EMB["SPECTER2 Embeddings"] --> PCA["PCA/SVD Reduction"] --> FAISS[("FAISS Semantic Index")]
+        EMB["SPECTER2 Embeddings"] --> PCA["PCA Reduction"] --> FAISS[("FAISS Semantic Index")]
         CG["Directed Citation Graph"]
     end
 
     subgraph P3["Phase 3: Community & Frontier Detection"]
         KM["k-means++<br/>(Semantic Communities)"]
         SL["Louvain<br/>(Citation Communities)"]
-        DS["Cross-Community Discrepancy Scoring<br/>(High Semantic Sim + Low Citation Density)"]
+        DS["Community Pair Comparison<br/>(Semantic Similarity + Citation Density)"]
         SL -->|"communities compared"| DS
         KM -.->|"alternative grouping"| DS
     end
@@ -55,41 +55,20 @@ flowchart TD
     DS --> BS
 ```
 
-1. **Phase 1: Literature Retrieval & Preparation**
-   - Queries OpenAlex REST API for seed works.
-   - Expands candidate pool via citation links (`referenced_works`) and concept overlaps.
-   - Applies MinHash signatures and Locality Sensitive Hashing (LSH) to eliminate near-duplicate preprints and republications.
-
-2. **Phase 2: Semantic & Citation Representation**
-   - Encodes paper titles and abstracts into 768-dimensional dense vectors with **SPECTER2**.
-   - Applies PCA/SVD to compress embeddings to 64 dimensions while preserving dominant variance.
-   - Builds a high-speed **FAISS** index for sub-millisecond nearest neighbor search.
-   - Constructs a directed citation network from citations between corpus papers (paper → paper it cites).
-
-3. **Phase 3: Community & Frontier Detection**
-   - Applies **k-means++** clustering on reduced semantic vectors to define topical boundaries.
-   - Applies **Louvain modularity** on the citation graph to isolate citation silos (number of communities chosen automatically).
-   - For each pair of citation communities (Louvain silos; configurable), measures semantic similarity (mean cosine over all paper pairs) and citation density relative to the whole graph (citations in both directions). A **frontier** is a pair with significant similarity (Phase 4) and below-average citation density.
-   - "Highly similar" is a percentile of observed similarities (default top 5%), so the cutoff adapts to the embedding space.
-   - Surfaces isolated paper pairs working on identical problems without citing each other, using FAISS range search so only pairs above the cutoff are examined.
-
-4. **Phase 4: Validation & Reporting**
-   - Computes a **similarity confidence interval** for each frontier by bootstrap resampling of papers (communities stay fixed).
-   - Tests $H_0$: "these two citation silos are no more similar in topic than random groups" with a **permutation test** that shuffles embeddings across papers.
-   - Writes a single self-contained HTML gap report.
-
 ---
 
-## 📂 Repository Structure
+## Repository Structure
 
 ```
 Project/RGD/
 ├── README.md                      # Comprehensive project documentation
 ├── requirements.txt               # Python package dependencies
-├── .env                           # Environment variables & OpenAlex API key
-├── .env.example                   # Template environment configuration
+├── .env.example                   # Template for .env (OpenAlex API key)
 ├── .gitignore                     # Git ignore rules for data, models, and environments
-├── config.yaml                    # Hyperparameters (FAISS dims, LSH bands, clustering k)
+├── config.yaml                    # Pipeline settings
+├── docs/                          # Method notes and OpenAlex API guide
+├── report/                        # Project report (main.tex, main.pdf)
+├── runs/pinn/                     # Example run: config, corpus, embeddings and reports
 ├── data/                          # Data storage (git-ignored)
 │   ├── raw/                       # Initial OpenAlex JSON/CSV outputs
 │   └── processed/                 # Stored corpus after duplicate removal and expansion
@@ -122,7 +101,7 @@ Project/RGD/
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### 1. Environment Setup
 
@@ -146,10 +125,10 @@ pip install -r requirements.txt
 
 ### 2. Configure Environment
 
-Create a `.env` file in the project root with your OpenAlex key:
+Copy the template and add your OpenAlex key:
 
-```ini
-OPENALEX_API_KEY=your_openalex_api_key
+```bash
+cp .env.example .env
 ```
 
 Since Feb 13, 2026, OpenAlex requires a free API key (100,000 credits/day). Without one, access is capped at 100 credits/day. An email address is no longer needed. See [docs/openalex_api.md](docs/openalex_api.md) for request formats, response structure and parsing details.
@@ -160,9 +139,9 @@ Run from the project root (paths in `config.yaml` are relative to it):
 
 ```bash
 python src/pipeline.py \
-  --query "anisotropy in large language models" \
-  --must-include anisotropy "language model|transformer" \
-  --max-seeds 50
+  --query "physics-informed neural networks" \
+  --must-include "physics-informed|PINN|PINNs" "neural network|neural networks" \
+  --max-seeds 100
 ```
 
 - `--must-include`: every term must appear in the title or abstract of seed papers; `|` separates alternatives, quotes mark phrases.
@@ -177,6 +156,8 @@ xdg-open reports/frontier_report.html   # Linux (macOS: open, Windows: start)
 
 The tables behind the report are `reports/validated_frontiers.csv` and `reports/isolated_paper_pairs.csv`.
 
+The results of this query used in the project report are committed in `runs/pinn/` (open `runs/pinn/reports/frontier_report.html`). Add `--config runs/pinn/config.yaml` to reproduce them into that folder.
+
 #### Mock Mode
 
 Runs the pipeline on a synthetic corpus without calling OpenAlex (SPECTER2 is still loaded). It writes to the same `reports/` folder:
@@ -187,11 +168,11 @@ python src/pipeline.py --query "graph neural networks" --max-seeds 30 --mock
 
 ---
 
-## ⚙️ Configuration Reference (`config.yaml`)
+## Configuration Reference (`config.yaml`)
 
 | Parameter Section | Key Parameters | Description |
 | :--- | :--- | :--- |
-| **`acquisition`** | `default_query`, `max_seed_papers`, `citation_expansion_depth` | Governs OpenAlex seed retrieval and expansion scope |
+| **`acquisition`** | `max_references_per_paper` | References of each seed paper added during citation expansion |
 | **`deduplication`** | `jaccard_threshold`, `lsh_threshold`, `num_perm`, `shingle_size` | Duplicate cutoff (exact Jaccard), LSH candidate cutoff, MinHash settings |
 | **`representation`** | `specter.model_name`, `pca.n_components`, `faiss.metric` | SPECTER2 model, PCA target dimensions (default 64), FAISS distance |
 | **`detection`** | `semantic_clustering.n_clusters`, `graph_clustering.resolution` | k-means++ and Louvain community parameters |
@@ -200,9 +181,9 @@ python src/pipeline.py --query "graph neural networks" --max-seeds 30 --mock
 
 ---
 
-## 📊 Outputs & Reports
+## Outputs & Reports
 
-Upon completion, all analytical artifacts are organized in `reports/` and `data/`:
-- `reports/frontier_report.html`: Self-contained gap report: community frontiers (labelled by a representative paper, with similarity CI and p-value) and isolated paper pairs.
+Outputs are written to `reports/`, with intermediate files in `data/` and `models/`:
+- `reports/frontier_report.html`: Self-contained gap report: citation graph coloured by community (most typical paper of each community highlighted), community frontiers with similarity CI and p-value, and isolated paper pairs. Paper titles link to the paper.
 - `reports/validated_frontiers.csv`: Ranked community frontiers with similarity confidence intervals and permutation-test p-values.
 - `reports/isolated_paper_pairs.csv`: Highly similar paper pairs with no citation between them.
