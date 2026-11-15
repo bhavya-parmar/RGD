@@ -116,7 +116,8 @@ def run_pipeline(
 
     dedup_cfg = cfg.get("deduplication", {})
     deduplicator = CorpusDeduplicator(
-        threshold=dedup_cfg.get("lsh_threshold", 0.85),
+        jaccard_threshold=dedup_cfg.get("jaccard_threshold", 0.8),
+        lsh_threshold=dedup_cfg.get("lsh_threshold"),
         num_perm=dedup_cfg.get("num_perm", 128),
         shingle_size=dedup_cfg.get("shingle_size", 3)
     )
@@ -208,12 +209,12 @@ def run_pipeline(
     )
     # Frontiers first, then by score; tests were corrected over all pairs before this cut
     validated_frontiers = validated_frontiers.sort_values(
-        ["is_frontier", "frontier_score"], ascending=False
+        ["is_frontier", "mean_semantic_similarity"], ascending=False
     ).head(front_cfg.get("top_k_frontiers", 10))
     validated_frontiers.to_csv(os.path.join(reports_dir, "validated_frontiers.csv"), index=False)
 
     report_html = write_html_report(
-        reports_dir, query, corpus_df, embeddings, citation_graph.graph.number_of_edges(),
+        reports_dir, query, corpus_df, embeddings, citation_graph.graph,
         validated_frontiers, isolated_paper_pairs, community_col=community_col
     )
     logger.info(f"Pipeline finished in {time.time() - total_start:.1f}s. Report: {report_html}")

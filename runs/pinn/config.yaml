@@ -1,0 +1,68 @@
+project:
+  name: Research Gap Discovery
+  version: 0.1.0
+  random_seed: 42
+paths:
+  raw_data_dir: runs/pinn/data/raw
+  processed_data_dir: runs/pinn/data/processed
+  embeddings_dir: runs/pinn/models/embeddings
+  faiss_indices_dir: runs/pinn/models/faiss_indices
+  reports_dir: runs/pinn/reports
+acquisition:
+  default_query: physics informed neural networks
+  max_seed_papers: 50
+  citation_expansion_depth: 1
+  max_references_per_paper: 20
+  openalex_base_url: https://api.openalex.org
+  request_timeout_sec: 15
+  rate_limit_pause_sec: 0.1
+deduplication:
+  jaccard_threshold: 0.8
+  lsh_threshold: 0.65
+  num_perm: 128
+  shingle_size: 3
+  fields_to_check:
+  - title
+  - abstract
+representation:
+  specter:
+    model_name: allenai/specter2_base
+    adapter_name: allenai/specter2
+    batch_size: 16
+    max_token_length: 512
+    device: auto
+  pca:
+    enabled: true
+    n_components: 64
+    random_state: 42
+  faiss:
+    dimension: 64
+    metric: inner_product
+    index_type: IndexFlatIP
+    top_k_neighbors: 10
+  citation_graph:
+    directed: true
+detection:
+  semantic_clustering:
+    init: k-means++
+    n_clusters: 8
+    max_iter: 300
+    random_state: 42
+  graph_clustering:
+    resolution: 1.0
+    random_state: 42
+  frontier_scoring:
+    community_col: citation_community
+    similarity_percentile: 95
+    max_density_ratio: 1.0
+    min_community_size: 3
+    top_k_frontiers: 10
+validation:
+  similarity_ci:
+    n_iterations: 500
+    subsample_ratio: 0.8
+    confidence: 0.95
+    random_state: 42
+  hypothesis_test:
+    n_permutations: 1000
+    alpha: 0.05

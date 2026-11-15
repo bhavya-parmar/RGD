@@ -25,7 +25,8 @@ acquisition:
   rate_limit_pause_sec: 0.1
 
 deduplication:
-  lsh_threshold: 0.8
+  jaccard_threshold: 0.8 # exact Jaccard needed to call two papers duplicates
+  lsh_threshold: 0.65 # LSH candidate cutoff, kept below jaccard_threshold so duplicates are rarely missed
   num_perm: 128
   shingle_size: 3
   fields_to_check:

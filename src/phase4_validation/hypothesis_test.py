@@ -95,8 +95,8 @@ class StatisticalValidator:
         H0: the two communities are no more similar in topic than two random groups
         of the same sizes.
         Shuffles which embedding belongs to which paper (communities and citations
-        stay fixed), recomputes the frontier score, and reports
-        p = fraction of shuffled scores >= observed score.
+        stay fixed), recomputes the mean similarity, and reports
+        p = fraction of shuffled similarities >= observed similarity.
         p-values are Benjamini-Hochberg adjusted across all tested pairs, and a pair
         is a frontier if it is significant after adjustment and has low citation.
         Communities come from citations and the null from the embeddings, so the
@@ -114,13 +114,12 @@ class StatisticalValidator:
         p_values = []
         for _, row in frontier_df.iterrows():
             in_a, in_b = labels == row["community_a"], labels == row["community_b"]
-            null_scores = [
+            null_sims = [
                 FrontierScorer.community_similarity(embeddings[perm][in_a], embeddings[perm][in_b])
-                * (1.0 - row["citation_density"])
                 for perm in perms
             ]
             # +1 in numerator and denominator: the observed arrangement counts as one permutation
-            n_extreme = sum(s >= row["frontier_score"] for s in null_scores)
+            n_extreme = sum(s >= row["mean_semantic_similarity"] for s in null_sims)
             p_values.append((n_extreme + 1) / (n_permutations + 1))
 
         result = frontier_df.copy()
@@ -158,5 +157,5 @@ if __name__ == "__main__":
     validator = StatisticalValidator(n_iterations=50)
     out = validator.similarity_confidence_interval(frontiers, corpus, emb)
     out = validator.permutation_test_significance(out, corpus, emb, n_permutations=50)
-    print(out[["community_a", "community_b", "frontier_score", "similarity_ci_low",
+    print(out[["community_a", "community_b", "mean_semantic_similarity", "similarity_ci_low",
                "similarity_ci_high", "p_value", "p_value_adjusted", "is_frontier"]])

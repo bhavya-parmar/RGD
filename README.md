@@ -69,7 +69,7 @@ flowchart TD
 3. **Phase 3: Community & Frontier Detection**
    - Applies **k-means++** clustering on reduced semantic vectors to define topical boundaries.
    - Applies **Louvain modularity** on the citation graph to isolate citation silos (number of communities chosen automatically).
-   - Calculates cross-community **Frontier Gap Scores** between citation communities (Louvain silos; configurable): $\text{Score} = \text{Sim}_{\text{semantic}} \times (1 - \text{Density}_{\text{citation}})$, where similarity is the mean cosine over all paper pairs and density counts citations in both directions.
+   - For each pair of citation communities (Louvain silos; configurable), measures semantic similarity (mean cosine over all paper pairs) and citation density relative to the whole graph (citations in both directions). A **frontier** is a pair with significant similarity (Phase 4) and below-average citation density.
    - "Highly similar" is a percentile of observed similarities (default top 5%), so the cutoff adapts to the embedding space.
    - Surfaces isolated paper pairs working on identical problems without citing each other, using FAISS range search so only pairs above the cutoff are examined.
 
@@ -192,7 +192,7 @@ python src/pipeline.py --query "graph neural networks" --max-seeds 30 --mock
 | Parameter Section | Key Parameters | Description |
 | :--- | :--- | :--- |
 | **`acquisition`** | `default_query`, `max_seed_papers`, `citation_expansion_depth` | Governs OpenAlex seed retrieval and expansion scope |
-| **`deduplication`** | `lsh_threshold`, `num_perm`, `shingle_size` | MinHash Jaccard threshold and permutation settings |
+| **`deduplication`** | `jaccard_threshold`, `lsh_threshold`, `num_perm`, `shingle_size` | Duplicate cutoff (exact Jaccard), LSH candidate cutoff, MinHash settings |
 | **`representation`** | `specter.model_name`, `pca.n_components`, `faiss.metric` | SPECTER2 model, PCA target dimensions (default 64), FAISS distance |
 | **`detection`** | `semantic_clustering.n_clusters`, `graph_clustering.resolution` | k-means++ and Louvain community parameters |
 | **`detection`** | `frontier_scoring.community_col`, `similarity_percentile`, `max_density_ratio` | Which communities are compared, paper-pair similarity cutoff, and "low citation" relative to the graph average |

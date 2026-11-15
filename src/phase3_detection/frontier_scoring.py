@@ -90,8 +90,8 @@ class FrontierScorer:
         community_col: str = "citation_community"
     ) -> pd.DataFrame:
         """
-        Score every pair of communities for frontier potential, sorted by score.
-        Frontier Score = Mean_Semantic_Sim * (1 - Citation_Density).
+        Measure every pair of communities: mean semantic similarity and citation
+        density relative to the whole graph. Sorted by similarity.
         All pairs are returned so that validation can correct for testing all of them.
         """
         assert community_col in df.columns, f"Column '{community_col}' missing from DataFrame."
@@ -128,8 +128,6 @@ class FrontierScorer:
                     "cross_citation_edges": nx.cut_size(citation_graph, members[c_a], members[c_b]),
                     "citation_density": density,
                     "density_ratio": density / graph_density if graph_density else 0.0,
-                    # High semantic similarity + low citation density = high frontier score
-                    "frontier_score": mean_sim * (1.0 - density),
                 })
 
         frontier_df = pd.DataFrame(results)
@@ -141,7 +139,7 @@ class FrontierScorer:
             f"Scored {len(frontier_df)} community pairs (graph density {graph_density:.4f}; "
             f"{int(frontier_df['low_citation'].sum())} pairs at or below {self.max_density_ratio:g}x)."
         )
-        return frontier_df.sort_values(by="frontier_score", ascending=False).reset_index(drop=True)
+        return frontier_df.sort_values(by="mean_semantic_similarity", ascending=False).reset_index(drop=True)
 
 
     def find_isolated_paper_pairs(
@@ -204,7 +202,7 @@ if __name__ == "__main__":
     mock_df = pd.DataFrame({
         "id": [f"p_{i}" for i in range(n)],
         "title": [f"Study on Method {i}" for i in range(n)],
-        "semantic_community": [0, 0, 0, 0, 0, 1, 1, 1, 1, 1],
+        "citation_community": [0, 0, 0, 0, 0, 1, 1, 1, 1, 1],
         "cited_by_count": np.random.randint(5, 100, size=n)
     })
     mock_emb = np.random.randn(n, 8).astype(np.float32)

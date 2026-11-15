@@ -27,8 +27,9 @@ models/faiss_indices/*
 !models/faiss_indices/.gitkeep
 
 # Output artifacts & reports
-reports/
+/reports/
 *.html
+!runs/*/reports/*.html
 *.pdf
 !report/main.pdf
 !Data-science-project-proposal.pdf

@@ -42,23 +42,25 @@ class CorpusDeduplicator:
 
     def __init__(
         self,
-        threshold: float = 0.85,
+        jaccard_threshold: float = 0.8,
         num_perm: int = 128,
         shingle_size: int = 3,
-        candidate_threshold: Optional[float] = None
+        lsh_threshold: Optional[float] = None
     ):
         """
-        threshold: exact Jaccard needed to call two papers duplicates (verification).
-        candidate_threshold: where the LSH S-curve is placed. Kept below `threshold`
-            so true duplicates are rarely missed; false positives are removed by
-            verification. Defaults to threshold - 0.15.
+        jaccard_threshold: exact Jaccard similarity needed to call two papers
+            duplicates (verification step).
+        lsh_threshold: where the LSH S-curve is placed, i.e. which pairs become
+            candidates. Kept below jaccard_threshold so true duplicates are rarely
+            missed; false positives are removed by verification.
+            Defaults to jaccard_threshold - 0.15.
         """
-        self.threshold = threshold
+        self.jaccard_threshold = jaccard_threshold
         self.num_perm = num_perm
         self.shingle_size = shingle_size
-        self.candidate_threshold = (
-            candidate_threshold if candidate_threshold is not None
-            else max(0.5, threshold - 0.15)
+        self.lsh_threshold = (
+            lsh_threshold if lsh_threshold is not None
+            else max(0.5, jaccard_threshold - 0.15)
         )
 
     def deduplicate(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
@@ -70,7 +72,7 @@ class CorpusDeduplicator:
             return df, 0
 
         initial_count = len(df)
-        logger.info(f"Starting MinHash/LSH deduplication on {initial_count} records (Threshold: {self.threshold})...")
+        logger.info(f"Starting MinHash/LSH deduplication on {initial_count} records (Jaccard: {self.jaccard_threshold}, LSH: {self.lsh_threshold})...")
 
         # Exact match deduplication on ID and Title
         df = df.drop_duplicates(subset=["id"]).copy()
@@ -98,8 +100,8 @@ class CorpusDeduplicator:
           4. verify candidates with exact Jaccard; keep only pairs >= threshold
         """
         # Step 3 setup: datasketch picks bands b and rows r (k = r * b) so the
-        # S-curve threshold (1/b)^(1/r) sits near candidate_threshold
-        lsh = MinHashLSH(threshold=self.candidate_threshold, num_perm=self.num_perm)
+        # S-curve threshold (1/b)^(1/r) sits near lsh_threshold
+        lsh = MinHashLSH(threshold=self.lsh_threshold, num_perm=self.num_perm)
         minhashes: Dict[str, MinHash] = {}
         shingle_sets: Dict[str, Set[str]] = {}
 
@@ -143,7 +145,7 @@ class CorpusDeduplicator:
             # positives are dropped here instead of deleting a real paper
             duplicates = [
                 c for c in candidates
-                if self._jaccard(shingle_sets[pid], shingle_sets[c]) >= self.threshold
+                if self._jaccard(shingle_sets[pid], shingle_sets[c]) >= self.jaccard_threshold
             ]
             n_verified += len(duplicates)
             if not duplicates:
@@ -158,7 +160,7 @@ class CorpusDeduplicator:
 
         logger.info(
             f"LSH: {n_candidates} candidate matches, {n_verified} verified "
-            f"(J >= {self.threshold}), {n_candidates - n_verified} false positives discarded."
+            f"(J >= {self.jaccard_threshold}), {n_candidates - n_verified} false positives discarded."
         )
         return df[~df["id"].astype(str).isin(to_remove)].copy()
 
@@ -171,7 +173,7 @@ if __name__ == "__main__":
         {"id": "W3", "title": "Graph Convolutional Networks for Semi-Supervised Classification", "abstract": "We present a scalable approach for semi-supervised learning on graph-structured data.", "cited_by_count": 800},
     ]
     df_raw = pd.DataFrame(test_data)
-    dedup = CorpusDeduplicator(threshold=0.80)
+    dedup = CorpusDeduplicator(jaccard_threshold=0.80)
     df_clean, removed_count = dedup.deduplicate(df_raw)
     print(f"Original: {len(df_raw)} records -> Clean: {len(df_clean)} records (Removed: {removed_count})")
     print(df_clean[["id", "title", "cited_by_count"]])

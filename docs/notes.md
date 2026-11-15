@@ -109,7 +109,7 @@ With n papers, this is how LSH avoids checking all n²/2 pairs: only papers that
 
 ### Step 4: Verification (exact Jaccard)
 
-For the candidate A–B, compute the true J on the shingle sets: 6/7 = 0.857 ≥ 0.8 (`lsh_threshold` in `config.yaml`), so it is a **confirmed duplicate**. The code keeps the record that has an abstract and more citations, and removes the other.
+For the candidate A–B, compute the true J on the shingle sets: 6/7 = 0.857 ≥ 0.8 (`jaccard_threshold` in `config.yaml`), so it is a **confirmed duplicate**. The code keeps the record that has an abstract and more citations, and removes the other.
 
 If LSH had made A–C a candidate by chance (a false positive), J = 0 would reject it here.
 
@@ -123,10 +123,10 @@ A first attempt used hash values modulo 101. Two of B's shingles, "differential 
 |---|---|
 | 1. Shingling | `create_shingles(title + abstract, k=shingle_size)` |
 | 2. Signature | `MinHash(num_perm=128)`, then `m.update(...)` for each shingle |
-| 3. Banding | `MinHashLSH(threshold=candidate_threshold)`, `lsh.insert`, `lsh.query` |
+| 3. Banding | `MinHashLSH(threshold=lsh_threshold)`, `lsh.insert`, `lsh.query` |
 | 4. Verify | `_jaccard(shingle_sets[a], shingle_sets[b]) >= threshold` |
 
-The code uses 128 hash functions instead of 12. datasketch chooses b and r itself so that the S-curve threshold (1/b)^(1/r) sits near `candidate_threshold` (0.65, which is `lsh_threshold` − 0.15).
+The code uses 128 hash functions instead of 12. datasketch chooses b and r itself so that the S-curve threshold (1/b)^(1/r) sits near `lsh_threshold` (0.65, which is `jaccard_threshold` − 0.15).
 
 ## Validating frontiers: confidence interval and permutation test
 
@@ -154,12 +154,12 @@ Communities stay fixed, so this measures how stable the **similarity number** is
 The communities are **citation silos** (Louvain groups papers that cite each other). A frontier is two silos that work on similar topics. Assume the boring explanation, the **null hypothesis H₀**: "these two silos are no more similar in topic than two random groups of papers of the same sizes". Then simulate that world and see whether the real result looks unusual in it.
 
 ```text
-observed score for (A, B) = mean_similarity(A, B) x (1 - citation_density(A, B))
-repeat 100 times:
+observed = mean_similarity(A, B)
+repeat n_permutations times:
     shuffle which embedding belongs to which paper
         (communities and citations stay fixed; topics become random)
-    recompute the score for (A, B)
-p-value = fraction of shuffled scores >= observed score
+    recompute mean_similarity(A, B)
+p-value = fraction of shuffled similarities >= observed
 ```
 
 | p-value | Meaning |

@@ -1,0 +1,30 @@
+[INFO] RGD-Pipeline: Query: 'physics-informed neural networks' (OpenAlex)
+[INFO] RGD-Pipeline: Phase 1/4: retrieval and deduplication
+[INFO] src.phase1_acquisition.openalex_fetch: Querying OpenAlex for: 'physics-informed neural networks' (Target: 100 papers)...
+[INFO] src.phase1_acquisition.openalex_fetch: Required terms filter: title_and_abstract.search:(physics-informed OR PINN OR PINNs) AND ("neural network" OR "neural networks")
+[INFO] src.phase1_acquisition.openalex_fetch: Fetched 100 seed papers from OpenAlex.
+[INFO] src.phase1_acquisition.openalex_fetch: Expanding corpus via citation links and related works...
+[INFO] src.phase1_acquisition.openalex_fetch: Identified 100 linked candidate papers to retrieve.
+[INFO] src.phase1_acquisition.openalex_fetch: Successfully retrieved 95 expanded papers.
+[INFO] src.phase1_acquisition.deduplication: Starting MinHash/LSH deduplication on 195 records (Jaccard: 0.8, LSH: 0.65)...
+[INFO] src.phase1_acquisition.deduplication: LSH: 0 candidate matches, 0 verified (J >= 0.8), 0 false positives discarded.
+[INFO] src.phase1_acquisition.deduplication: Deduplication complete: 194 retained, 1 removed.
+[INFO] RGD-Pipeline: Phase 2/4: embeddings, FAISS index and citation graph
+[INFO] src.phase2_representation.embed_specter: Loading SPECTER2 tokenizer and model 'allenai/specter2_base' on cpu...
+[WARNING] src.phase2_representation.embed_specter: `adapters` not installed; using SPECTER2 base model without adapter.
+[INFO] src.phase2_representation.embed_specter: SPECTER2 successfully loaded.
+[INFO] src.phase2_representation.embed_specter: Reduced embeddings from 768 to 64 dimensions (Cumulative Explained Variance: 91.80%).
+[INFO] src.phase2_representation.faiss_index: Added 194 vectors to FAISS index.
+[INFO] src.phase2_representation.faiss_index: Saved semantic index to runs/pinn/models/faiss_indices/semantic.index
+[INFO] src.phase2_representation.citation_graph: Built citation graph: 194 nodes, 1164 edges (intra-corpus citations: 1164).
+[INFO] RGD-Pipeline: Phase 3/4: communities and frontier scoring
+[INFO] src.phase3_detection.semantic_cluster: Detected 8 semantic communities (Overall Silhouette: 0.1219).
+[INFO] src.phase3_detection.graph_cluster: Detected 9 citation communities via Louvain (Modularity: 0.2572).
+[INFO] src.phase3_detection.frontier_scoring: Evaluating cross-community frontiers across 8 valid 'citation_community' communities...
+[INFO] src.phase3_detection.frontier_scoring: Scored 28 community pairs (graph density 0.0311; 19 pairs at or below 1x).
+[INFO] src.phase3_detection.frontier_scoring: Paper similarity cutoff (p95): 0.4229; FAISS returned 2066 neighbor hits.
+[INFO] RGD-Pipeline: Phase 4/4: validation and report
+[INFO] src.phase4_validation.hypothesis_test: Similarity CI: 500 bootstrap samples of 155/194 papers...
+[INFO] src.phase4_validation.hypothesis_test: Permutation test: 1000 shuffles of paper embeddings...
+[INFO] src.phase4_validation.report: Wrote HTML gap report to runs/pinn/reports/frontier_report.html
+[INFO] RGD-Pipeline: Pipeline finished in 100.5s. Report: runs/pinn/reports/frontier_report.html
